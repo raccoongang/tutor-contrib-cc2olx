@@ -2,7 +2,7 @@ import os
 import subprocess
 from contextlib import closing
 from pathlib import Path
-from typing import Generator, List
+from typing import Generator, List, Tuple
 from uuid import uuid4
 
 import click
@@ -17,8 +17,8 @@ from cc2olx_plugin.utils.docker import (
 from cc2olx_plugin.utils.filesystem import create_directory_if_not_exists
 
 OUTPUT_ARGS = ('-o', '--output')
-SINGLE_PATH_ARGS = (*OUTPUT_ARGS, '-f', '--link_file', '-p', '--passport-file')
-MULTIPLE_PATH_ARGS = ('-i', '--inputs')
+LOGS_DIR_ARGS = ('--logs_dir',)
+PATH_ARGS = (*OUTPUT_ARGS, *LOGS_DIR_ARGS, '-i', '--inputs', '-f', '--link_file', '-p', '--passport-file')
 
 
 @click.command(
@@ -36,32 +36,35 @@ def cc2olx(context: click.Context) -> None:
 
     if not (set(args).intersection(OUTPUT_ARGS)):
         args.extend(['-o', DEFAULT_OUTPUT_ARG_VALUE])
-    _create_output_directory_if_not_exists(args)
+    _create_path_argument_ancestors_if_not_exist(OUTPUT_ARGS, args)
+
+    if set(args).intersection(LOGS_DIR_ARGS):
+        _create_path_argument_ancestors_if_not_exist(LOGS_DIR_ARGS, args)
 
     command = _build_cc2olx_run_command(args)
 
     _run_cc2olx_converter(command)
 
 
-def _create_output_directory_if_not_exists(args: List[str]) -> None:
+def _create_path_argument_ancestors_if_not_exist(path_argument_names: Tuple[str, ...], args: List[str]) -> None:
     """
-    Create the converting output directory and its ancestors if they do not exist.
+    Create the path argument ancestors if they do not exist.
 
-    Allows to avoid the situation when the directory corresponding to the output
-    path doesn't exist and Docker creates it on behalf of the root, so the
-    current host user has no access to it. Such function should be run before
-    the Docker command to create the output directory on behalf of the current
-    host user if it doesn't exist.
+    Allows to avoid the situation when the ancestors corresponding to the path
+    argument value don't exist and Docker creates them on behalf of the root,
+    so the current host user has no access to them. Such function should be run
+    before the Docker command to create the path ancestors on behalf of the
+    current host user if they don't exist.
     """
-    for output_arg in OUTPUT_ARGS:
-        for argument_index in _generate_argument_indexes(output_arg, args):
+    for argument_name in path_argument_names:
+        for argument_index in _generate_argument_indexes(argument_name, args):
             argument_value_index = argument_index + 1
 
             if argument_value_index < len(args):
-                output_path = args[argument_value_index]
+                directory_path = args[argument_value_index]
 
-                if not is_command_line_argument_name(output_path):
-                    create_directory_if_not_exists(Path(output_path).parent)
+                if not is_command_line_argument_name(directory_path):
+                    create_directory_if_not_exists(Path(directory_path).parent)
 
 
 def _build_cc2olx_run_command(args: List[str]) -> List[str]:
@@ -72,10 +75,8 @@ def _build_cc2olx_run_command(args: List[str]) -> List[str]:
     """
     bind_mounts = []
 
-    for argument in SINGLE_PATH_ARGS:
-        _process_single_path_argument(argument, args, bind_mounts)
-    for argument in MULTIPLE_PATH_ARGS:
-        _process_multiple_path_argument(argument, args, bind_mounts)
+    for argument in PATH_ARGS:
+        _process_path_argument(argument, args, bind_mounts)
 
     user_id = os.getuid()
 
@@ -106,23 +107,9 @@ def _run_cc2olx_converter(command: List[str]) -> None:
         command_process.wait()
 
 
-def _process_multiple_path_argument(argument: str, argument_list: List[str], bind_mount_args: List[str]) -> None:
+def _process_path_argument(argument: str, argument_list: List[str], bind_mount_args: List[str]) -> None:
     """
-    Process the CLI argument that can contain multiple values.
-    """
-    for argument_index in _generate_argument_indexes(argument, argument_list):
-        argument_value_index = argument_index
-
-        while True:
-            argument_value_index += 1
-
-            if not _process_argument_value(argument_value_index, argument_list, bind_mount_args):
-                break
-
-
-def _process_single_path_argument(argument: str, argument_list: List[str], bind_mount_args: List[str]) -> None:
-    """
-    Process the CLI argument that can contain a single value.
+    Process the CLI filesystem path-related argument.
     """
     for argument_index in _generate_argument_indexes(argument, argument_list):
         _process_argument_value(argument_index + 1, argument_list, bind_mount_args)
